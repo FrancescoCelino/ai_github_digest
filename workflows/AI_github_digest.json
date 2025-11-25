@@ -1,0 +1,272 @@
+{
+  "name": "AI_github_digest",
+  "nodes": [
+    {
+      "parameters": {
+        "rule": {
+          "interval": [
+            {
+              "daysInterval": "={{ parseInt($env.LOOKBACK_DAYS || '7') }}",
+              "triggerAtHour": 11
+            }
+          ]
+        }
+      },
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "typeVersion": 1.2,
+      "position": [
+        0,
+        0
+      ],
+      "id": "e7319ea4-7573-47cf-a7e7-256cb49dd1b7",
+      "name": "Schedule Trigger",
+      "retryOnFail": false
+    },
+    {
+      "parameters": {
+        "url": "https://api.github.com/search/repositories",
+        "authentication": "none",
+        "sendQuery": true,
+        "queryParameters": {
+          "parameters": [
+            {
+              "name": "q",
+              "value": "={{ (($env.SEARCH_TOPICS || 'generative-ai,llm,gpt,stable-diffusion,langchain').split(',').map(t => t.trim()).join(' OR ')) + ' language:python stars:>' + ($env.MIN_STARS || '50') + ' pushed:>=' + $now.minus({days: parseInt($env.LOOKBACK_DAYS || '7')}).toFormat('yyyy-MM-dd') }}"
+            },
+            {
+              "name": "sort",
+              "value": "stars"
+            },
+            {
+              "name": "order",
+              "value": "desc"
+            },
+            {
+              "name": "per_page",
+              "value": "={{ Math.max(30, parseInt($env.MAX_REPOS || '10') * 3) }}"
+            }
+          ]
+        },
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Accept",
+              "value": "application/vnd.github+json"
+            },
+            {
+              "name": "X-GitHub-Api-Version",
+              "value": "2022-11-28"
+            },
+            {
+              "name": "User-Agent",
+              "value": "n8n-ai-digest"
+            },
+            {
+              "name": "Authorization",
+              "value": "={{ 'token ' + $env.GITHUB_TOKEN }}"
+            }
+          ]
+        },
+        "options": {
+          "timeout": 10000
+        }
+      },
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.3,
+      "position": [
+        208,
+        0
+      ],
+      "id": "2042f138-549b-4a54-bfb6-cf8e2a0f621d",
+      "name": "HTTP Request"
+    },
+    {
+      "parameters": {
+        "modelId": {
+          "__rl": true,
+          "value": "gpt-5-mini",
+          "mode": "list",
+          "cachedResultName": "GPT-5-MINI"
+        },
+        "responses": {
+          "values": [
+            {
+              "role": "system",
+              "content": "=You are a curator of exciting GitHub repositories. Below is a list of trending repos discovered this week.\n\nCreate an engaging email that:\n- Highlights 3-5 of the most promising repositories\n- Explains WHY each matters (look at topics and descriptions for clues about use cases)\n- Uses an enthusiastic but professional tone\n- Keeps it concise (under 500 words)\n\nFormat:\n- Catchy subject line\n- Brief intro\n- One paragraph per repo (name as header with markdown formatting, compelling description)\n- Closing encouragement\n\nRepository data (name, description, topics):\n{{JSON.stringify($json.repositories, null, 2)}}\n\nOutput only the email content (subject + body). After the subject and before the body, plug exactly two newline characters, no more, no less. "
+            }
+          ]
+        },
+        "builtInTools": {},
+        "options": {}
+      },
+      "type": "@n8n/n8n-nodes-langchain.openAi",
+      "typeVersion": 2,
+      "position": [
+        848,
+        0
+      ],
+      "id": "4e4c8dcd-ce3e-452d-be0a-0bb21ceb96a2",
+      "name": "Message a model"
+    },
+    {
+      "parameters": {
+        "jsCode": "// Input: $input.all() contains the repo array from GitHub\n\nconst repos = $input.all()[0].json.items;\n\n// Get environment variables with defaults\nconst minStars = parseInt($env.MIN_STARS || '50');\nconst maxRepos = parseInt($env.MAX_REPOS || '10');\n\n//  scoring function\nfunction calculateScore(repo) {\n  const now = new Date();\n  const created = new Date(repo.created_at);\n  const pushed = new Date(repo.pushed_at);\n  \n  const daysSinceCreation = (now - created) / (1000 * 60 * 60 * 24);\n  const daysSinceLastPush = (now - pushed) / (1000 * 60 * 60 * 24);\n  \n  // Activity score\n  let activityScore = 0;\n  if (daysSinceCreation < 30) activityScore = 100;\n  else if (daysSinceLastPush < 7) activityScore = 80;\n  else if (daysSinceLastPush < 30) activityScore = 50;\n  else activityScore = 20;\n  \n  // Weighted score\n  const score = (repo.stargazers_count * 0.4) +\n                (repo.forks_count * 0.2) +\n                (repo.watchers_count * 0.1) +\n                (activityScore * 0.3);\n  \n  return score;\n}\n\n// filter and enrich with score\nconst enrichedRepos = repos\n  .filter(repo => {\n    // exclude: archived, no description, < minStars\n    return !repo.archived && \n           repo.description && \n           repo.stargazers_count >= minStars;\n  })\n  .map(repo => ({\n    name: repo.name,\n    full_name: repo.full_name,\n    description: repo.description,\n    url: repo.html_url,\n    stars: repo.stargazers_count,\n    forks: repo.forks_count,\n    language: repo.language,\n    topics: repo.topics || [],\n    created_at: repo.created_at,\n    pushed_at: repo.pushed_at,\n    license: repo.license?.name || 'No license',\n    score: calculateScore(repo)\n  }))\n  .sort((a, b) => b.score - a.score)\n  .slice(0, maxRepos); // Top N repos from env\n\n// Output for next node \nreturn enrichedRepos.map(repo => ({ json: repo }));"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        416,
+        0
+      ],
+      "id": "533e776f-98c5-4640-ad1d-a4ba5ed76804",
+      "name": "Find best repos according to score"
+    },
+    {
+      "parameters": {
+        "jsCode": "const filtered = $input.all().map(item => ({\n  name: item.json.name,\n  description: item.json.description,\n  topics: item.json.topics,\n  stars: item.json.stars\n}));\n\nreturn [{ json: { repositories: filtered } }];"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        624,
+        0
+      ],
+      "id": "a1e27c47-59a5-4f21-bcda-76b827b349b7",
+      "name": "Format repos for LLM"
+    },
+    {
+      "parameters": {
+        "sendTo": "={{ $env.RECIPIENT_EMAIL }}",
+        "subject": "={{ $json.subject }}",
+        "message": "={{ $json.htmlBody }}",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.gmail",
+      "typeVersion": 2.1,
+      "position": [
+        1808,
+        144
+      ],
+      "id": "bfb88805-5948-439a-840b-31dc18840e01",
+      "name": "Send a message"
+    },
+    {
+      "parameters": {
+        "jsCode": "const subject = $json.subject;\nconst body = $json.body;\n\n\n// Convert markdown-style formatting to HTML\nlet htmlBody = body\n  .replace(/### (.+)/g, '<h3>$1</h3>')  // Headers\n  .replace(/## (.+)/g, '<h2>$1</h2>')\n  .replace(/⭐ (.+)/g, '<p>⭐ <strong>$1</strong></p>')  // Stars\n  .replace(/🔗 (https?:\\/\\/[^\\s]+)/g, '<p>🔗 <a href=\"$1\">$1</a></p>')  // Links\n  .replace(/Topics: (.+)/g, '<p><em>Topics: $1</em></p>')  // Topics\n  .replace(/---/g, '<hr>')  // Horizontal rules\n  .replace(/\\n\\n/g, '</p><p>')  // Paragraphs\n  .replace(/\\n/g, '<br>');  // Line breaks\n\nhtmlBody = `\n<html>\n<body style=\"font-family: Arial, sans-serif; line-height: 1.6; color: #333; max-width: 600px;\">\n  <p>${htmlBody}</p>\n</body>\n</html>\n`;\n\nreturn [{ json: { subject, htmlBody } }];"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1552,
+        144
+      ],
+      "id": "8ca2c242-8162-489e-a0a8-498c5a705e3f",
+      "name": "Format as HTML"
+    },
+    {
+      "parameters": {
+        "jsCode": "// Get the LLM generated email text\nconst llmOutput = $input.first().json.output[0].content[0].text;\n\n// Extract subject and body separately\nconst lines = llmOutput.split('\\n');\nconst subjectLine = lines[0].replace('Subject: ', '').trim();\n\n// Remove the subject line and any empty lines at the start\nconst bodyLines = lines.slice(1).filter(line => line.trim() !== '');\nconst emailBody = bodyLines.join('\\n');\n\n// Get all the original repo items from the previous node\nconst repos = $('Find best repos according to score').all();\n\n// Build the repo list section\nlet repoList = '\\n\\n---\\n\\n## Full Repository Details:\\n\\n';\n\nrepos.forEach(item => {\n  const repo = item.json;\n  repoList += `### ${repo.name}\\n`;\n  repoList += `⭐ ${repo.stars.toLocaleString()} stars\\n`;\n  repoList += `${repo.description}\\n`;\n  repoList += `🔗 ${repo.url}\\n`;\n  repoList += `Topics: ${repo.topics.join(', ')}\\n\\n`;\n});\n\n// Combine body (without subject) with repo list\nconst finalEmailBody = emailBody + repoList;\n\nreturn [{ \n  json: { \n    subject: subjectLine,\n    body: finalEmailBody\n  } \n}];"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1200,
+        0
+      ],
+      "id": "ff95e8ea-33e5-478a-bf31-272dbd76a590",
+      "name": "Combine LLM output and repos info"
+    }
+  ],
+  "pinData": {},
+  "connections": {
+    "Schedule Trigger": {
+      "main": [
+        [
+          {
+            "node": "HTTP Request",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "HTTP Request": {
+      "main": [
+        [
+          {
+            "node": "Find best repos according to score",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Message a model": {
+      "main": [
+        [
+          {
+            "node": "Combine LLM output and repos info",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Find best repos according to score": {
+      "main": [
+        [
+          {
+            "node": "Format repos for LLM",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Format repos for LLM": {
+      "main": [
+        [
+          {
+            "node": "Message a model",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Format as HTML": {
+      "main": [
+        [
+          {
+            "node": "Send a message",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Combine LLM output and repos info": {
+      "main": [
+        [
+          {
+            "node": "Format as HTML",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "active": false,
+  "settings": {
+    "executionOrder": "v1"
+  },
+  "versionId": "133f342b-547a-4da4-980f-10690236dda7",
+  "meta": {
+    "templateCredsSetupCompleted": true,
+    "instanceId": "bc154e946a14bf7482916c6a00c9b8b70677182bba1e543ea063cfc92b074d11"
+  },
+  "id": "uPZrH6KqHLucXRWF",
+  "tags": []
+}
