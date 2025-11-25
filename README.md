@@ -2,6 +2,11 @@
 
 Automated weekly email digest of trending AI/ML repositories on GitHub, powered by n8n.
 
+## Workflow Overview
+
+![AI GitHub Digest Workflow](docs/screenshots/workflow.jpg)
+
+
 ## Features
 
 - Searches GitHub for trending AI/ML repositories (Python-focused)
