@@ -49,7 +49,7 @@ MIT License - see [LICENSE](LICENSE) file for details.
 
 ## Version History
 
-### v1.0.0 (2024-11-24)
+### v1.0.0 (2025-11-24)
 
 - Initial release
 - GitHub API integration
